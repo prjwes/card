@@ -1,0 +1,403 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f7fa;
+            text-align: center;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 12px 24px;
+            margin: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #3498db;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        input {
+            margin: 10px;
+            padding: 10px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 200px;
+        }
+        #preview {
+            text-align: left;
+            margin-top: 30px;
+        }
+        .card {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+            max-width: 100%;
+            overflow-x: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 14px;
+        }
+        th, td {
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        h3 {
+            color: #2c3e50;
+            font-size: 1.5em;
+            margin-top: 20px;
+        }
+        #status {
+            font-size: 1.2em;
+            color: #2c3e50;
+            margin: 20px 0;
+        }
+        @media (max-width: 600px) {
+            button, input {
+                display: block;
+                width: 90%;
+                margin: 10px auto;
+            }
+            h1 {
+                font-size: 1.8em;
+            }
+            .card {
+                padding: 15px;
+            }
+            table {
+                font-size: 12px;
+            }
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Card Generator</h1>
+    <div id="grade-selection">
+        <button onclick="selectGrade(7)">Grade 7</button>
+        <button onclick="selectGrade(8)">Grade 8</button>
+        <button onclick="selectGrade(9)">Grade 9</button>
+    </div>
+    <div id="form-section" class="hidden">
+        <label for="term">Term:</label>
+        <input type="text" id="term" placeholder="e.g., Term 1">
+        <label for="year">Year:</label>
+        <input type="text" id="year" placeholder="e.g., 2025">
+        <label for="exam1">Upload Exam 1 (Excel):</label>
+        <input type="file" id="exam1" accept=".xlsx">
+        <label for="exam2">Upload Exam 2 (Excel):</label>
+        <input type="file" id="exam2" accept=".xlsx">
+        <button onclick="generateCards()">Generate Cards</button>
+    </div>
+    <div id="result-section" class="hidden">
+        <p id="status"></p>
+        <div id="preview"></div>
+        <button id="download-btn" class="hidden" onclick="downloadExcel()">Save on Phone</button>
+    </div>
+
+    <script>
+        let selectedGrade = null;
+        let wb = null;
+
+        function selectGrade(grade) {
+            selectedGrade = grade;
+            document.getElementById('grade-selection').classList.add('hidden');
+            document.getElementById('form-section').classList.remove('hidden');
+        }
+
+        function colToIndex(col) {
+            return col.charCodeAt(0) - 'A'.charCodeAt(0);
+        }
+
+        function addCell(ws, addr, value, style = {}) {
+            if (value === undefined || value === null) return;
+            const cell = { v: value };
+            if (typeof value === 'number') {
+                cell.t = 'n';
+            } else {
+                cell.t = 's';
+            }
+            ws[addr] = cell;
+            if (Object.keys(style).length > 0) {
+                ws[addr].s = style;
+            }
+        }
+
+        function addFixedCells(ws) {
+            addCell(ws, 'D1', 'REPORT FORM', { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'B2', 'LEARNER\'S NAME: ', { font: { bold: true } });
+            addCell(ws, 'D2', 'ADM: ', { font: { bold: true } });
+            addCell(ws, 'B3', 'GRADE: ', { font: { bold: true } });
+            addCell(ws, 'D3', 'TERM: ', { font: { bold: true } });
+            addCell(ws, 'F3', 'YEAR: ', { font: { bold: true } });
+            addCell(ws, 'B5', 's/no', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'C5', 'learning area', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'D5', 'exam 1', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'E5', 'rubric', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'F5', 'exam 2', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'G5', 'rubric2', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'H5', 'comment', { font: { bold: true }, fill: { fgColor: { rgb: "3498DB" } }, alignment: { horizontal: 'center' } });
+            addCell(ws, 'B6', '1', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C6', 'English');
+            addCell(ws, 'B7', '2', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C7', 'Kiswahili');
+            addCell(ws, 'B8', '3', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C8', 'Mathematics');
+            addCell(ws, 'B9', '4', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C9', 'Intergrated science');
+            addCell(ws, 'B10', '5', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C10', 'c.r.e');
+            addCell(ws, 'B11', '6', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C11', 'c.a & sports');
+            addCell(ws, 'B12', '7', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C12', 'Pre.technical studies');
+            addCell(ws, 'B13', '8', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C13', 'Social studies');
+            addCell(ws, 'B14', '9', { alignment: { horizontal: 'center' } });
+            addCell(ws, 'C14', 'Agriculture');
+            addCell(ws, 'C15', 'Average', { font: { bold: true } });
+            addCell(ws, 'A16', 'Facilitator’s remarks based on: core competences, achievements, PCI’s development and values.', { font: { italic: true } });
+            addCell(ws, 'A17', '1.BELOW EXPECTATIONS {B.E}    2. APPROACH EXPECTATIONS {A.E}');
+            addCell(ws, 'A18', '3. MEETING EXPECTATIONS {M.E}     4. EXCEEDING EXPECTATIONS {E.E}');
+            addCell(ws, 'A19', 'FACILITATOR’S SIGNATURE………………….… DATE………………….…', { font: { bold: true } });
+            addCell(ws, 'A21', 'HEAD TEACHER’S SIGNATURE…………………. ', { font: { bold: true } });
+            addCell(ws, 'A23', 'DATE………………….', { font: { bold: true } });
+            addCell(ws, 'A25', 'PARENT’S SIGNATURE………………….DATE………………….', { font: { bold: true } });
+            addCell(ws, 'A26', 'THE TERM STARTED ON: 6/1/2025   CLOSING DATE: 4/4/2025');
+            addCell(ws, 'A27', 'NEXT TERM BEGINS ON: 28/4/2025');
+        }
+
+        async function readFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        async function generateCards() {
+            const term = document.getElementById('term').value.trim();
+            const year = document.getElementById('year').value.trim();
+            const exam1File = document.getElementById('exam1').files[0];
+            const exam2File = document.getElementById('exam2').files[0];
+
+            if (!selectedGrade || !term || !year || !exam1File || !exam2File) {
+                alert('Please fill all fields and upload both files.');
+                return;
+            }
+
+            document.getElementById('form-section').classList.add('hidden');
+            document.getElementById('result-section').classList.remove('hidden');
+            document.getElementById('status').textContent = 'Generating cards...';
+
+            try {
+                const data1 = await readFile(exam1File);
+                const data2 = await readFile(exam2File);
+
+                const wb1 = XLSX.read(data1, { type: 'array' });
+                const wb2 = XLSX.read(data2, { type: 'array' });
+
+                const sheetName1 = wb1.SheetNames[0];
+                const sheetName2 = wb2.SheetNames[0];
+
+                const ws1 = wb1.Sheets[sheetName1];
+                const ws2 = wb2.Sheets[sheetName2];
+
+                const range1 = XLSX.utils.decode_range(ws1['!ref']);
+                const range2 = XLSX.utils.decode_range(ws2['!ref']);
+                const rowCount = Math.min(range1.e.r + 1, range2.e.r + 1);
+
+                const mappings = [
+                    { col: 'D', exam1: 'D6', exam2: 'F6' },
+                    { col: 'E', exam1: 'E6', exam2: 'G6' },
+                    { col: 'F', exam1: 'D7', exam2: 'F7' },
+                    { col: 'G', exam1: 'E7', exam2: 'G7' },
+                    { col: 'H', exam1: 'D8', exam2: 'F8' },
+                    { col: 'I', exam1: 'E8', exam2: 'G8' },
+                    { col: 'J', exam1: 'D9', exam2: 'F9' },
+                    { col: 'K', exam1: 'E9', exam2: 'G9' },
+                    { col: 'L', exam1: 'D10', exam2: 'F10' },
+                    { col: 'M', exam1: 'E10', exam2: 'G10' },
+                    { col: 'N', exam1: 'D11', exam2: 'F11' },
+                    { col: 'O', exam1: 'E11', exam2: 'G11' },
+                    { col: 'P', exam1: 'D12', exam2: 'F12' },
+                    { col: 'Q', exam1: 'E12', exam2: 'G12' },
+                    { col: 'R', exam1: 'D13', exam2: 'F13' },
+                    { col: 'S', exam1: 'E13', exam2: 'G13' },
+                    { col: 'T', exam1: 'D14', exam2: 'F14' },
+                    { col: 'U', exam1: 'E14', exam2: 'G14' },
+                    { col: 'V', exam1: 'D16', exam2: 'F16' },
+                    { col: 'W', exam1: 'E16', exam2: 'G16' },
+                    { col: 'X', exam1: 'H16', exam2: null }
+                ];
+
+                wb = XLSX.utils.book_new();
+                const previewDiv = document.getElementById('preview');
+                previewDiv.innerHTML = '';
+
+                let validCards = 0;
+
+                for (let i = 3; i < rowCount; i++) {
+                    const rowNum = i + 1;
+                    const adm = ws1[`B${rowNum}`]?.v || '';
+                    const name = ws1[`C${rowNum}`]?.v || '';
+
+                    if (!adm || !name) continue;
+
+                    const ws = {};
+
+                    addFixedCells(ws);
+
+                    addCell(ws, 'B2', `LEARNER'S NAME: ${name}`, { alignment: { horizontal: 'left' } });
+                    addCell(ws, 'D2', `ADM: ${adm}`, { alignment: { horizontal: 'left' } });
+                    addCell(ws, 'B3', `GRADE: ${selectedGrade}`, { alignment: { horizontal: 'left' } });
+                    addCell(ws, 'D3', `TERM: ${term}`, { alignment: { horizontal: 'left' } });
+                    addCell(ws, 'F3', `YEAR: ${year}`, { alignment: { horizontal: 'left' } });
+
+                    mappings.forEach(m => {
+                        const colIdx = colToIndex(m.col);
+                        const cell1 = ws1[XLSX.utils.encode_cell({ r: i, c: colIdx })];
+                        const cell2 = m.exam2 ? ws2[XLSX.utils.encode_cell({ r: i, c: colIdx })] : null;
+                        if (m.exam1 && cell1) addCell(ws, m.exam1, cell1.v, { alignment: { horizontal: 'center' } });
+                        if (m.exam2 && cell2) addCell(ws, m.exam2, cell2.v, { alignment: { horizontal: 'center' } });
+                    });
+
+                    ws['!merges'] = [
+                        { s: { r: 0, c: 3 }, e: { r: 0, c: 6 } }, // D1 to G1 for REPORT FORM
+                    ];
+
+                    ws['!ref'] = 'A1:H28';
+                    ws['!cols'] = [
+                        { wch: 40 }, // A
+                        { wch: 15 }, // B
+                        { wch: 30 }, // C
+                        { wch: 12 }, // D
+                        { wch: 12 }, // E
+                        { wch: 12 }, // F
+                        { wch: 12 }, // G
+                        { wch: 20 }  // H
+                    ];
+                    ws['!rows'] = Array(28).fill({ hpt: 20 });
+
+                    const sheetName = `Card_${adm}_${name}`.replace(/[^a-zA-Z0-9]/g, '_');
+                    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+
+                    const html = XLSX.utils.sheet_to_html(ws, { editable: false });
+                    const cardDiv = document.createElement('div');
+                    cardDiv.className = 'card';
+                    cardDiv.innerHTML = `<h3>${sheetName}</h3>${html}`;
+                    previewDiv.appendChild(cardDiv);
+
+                    validCards++;
+                }
+
+                if (validCards === 0) {
+                    throw new Error('No valid data found in the uploaded files. Ensure both files have matching data starting from row 4.');
+                }
+
+                document.getElementById('status').textContent = `Successfully generated ${validCards} card(s)!`;
+                document.getElementById('download-btn').classList.remove('hidden');
+            } catch (error) {
+                document.getElementById('status').textContent = `Error: ${error.message}`;
+                document.getElementById('download-btn').classList.add('hidden');
+            }
+        }
+
+        function downloadExcel() {
+            if (wb && wb.SheetNames.length > 0) {
+                try {
+                    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+                    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'generated_report_cards.xlsx';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                    }, 0);
+                } catch (error) {
+                    alert('Failed to download the file. Please check browser permissions or try a different browser.');
+                    console.error('Download error:', error);
+                }
+            } else {
+                alert('No cards generated to download. Please generate cards first.');
+            }
+        }
+    </script>
+</body>
+</html>
